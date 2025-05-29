@@ -780,6 +780,20 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                                 outputAudio = segmentAudio;
                             }
                             
+                            // Normalize audio volume
+                            float maxAbsValue = 0.0f;
+                            for (const auto& sample : outputAudio) {
+                                maxAbsValue = std::max(maxAbsValue, std::abs(sample));
+                            }
+                            
+                            if (maxAbsValue > 0.0f) {
+                                // Normalize to 90% of maximum to avoid clipping
+                                float normalizeGain = 0.9f / maxAbsValue;
+                                for (auto& sample : outputAudio) {
+                                    sample *= normalizeGain;
+                                }
+                            }
+                            
                             // Write WAV file
                             std::ofstream file(filename, std::ios::binary);
                             if (file.is_open()) {
@@ -908,6 +922,20 @@ int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
                     }
                 } else {
                     outputAudio = segmentAudio;
+                }
+                
+                // Normalize audio volume
+                float maxAbsValue = 0.0f;
+                for (const auto& sample : outputAudio) {
+                    maxAbsValue = std::max(maxAbsValue, std::abs(sample));
+                }
+                
+                if (maxAbsValue > 0.0f) {
+                    // Normalize to 90% of maximum to avoid clipping
+                    float normalizeGain = 0.9f / maxAbsValue;
+                    for (auto& sample : outputAudio) {
+                        sample *= normalizeGain;
+                    }
                 }
                 
                 // Write final segment
