@@ -1,3 +1,10 @@
+//
+//  wqvad_impl.h
+//  WQVad内部实现头文件
+//
+//  Created by Jimmy Gan on 2025-5-25.
+//
+
 #ifndef WQVAD_IMPL_H
 #define WQVAD_IMPL_H
 
@@ -8,8 +15,8 @@
 
 namespace wqvad {
 
-// Internal implementation details
-// This file is included only in the implementation
+// 内部实现细节
+// 此文件仅在实现中包含
 
 } // namespace wqvad
 

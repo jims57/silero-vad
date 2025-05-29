@@ -91,11 +91,9 @@ install(EXPORT WQVadTargets
 )
 
 # Copy Silero model to build directory
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/silero_vad_v5.onnx"
-    "${CMAKE_CURRENT_BINARY_DIR}/silero_vad_v5.onnx"
-    COPYONLY
-)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/wq_vad.onnx 
+               ${CMAKE_CURRENT_BINARY_DIR}/wq_vad.onnx 
+               COPYONLY)
 
 # Examples and tests
 if(NOT IOS)
