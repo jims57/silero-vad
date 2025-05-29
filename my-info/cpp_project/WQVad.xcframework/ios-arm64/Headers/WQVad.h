@@ -11,6 +11,7 @@ extern "C" {
 // WQVad C API for Objective-C integration
 
 typedef struct WQVadContext WQVadContext;
+typedef struct WQVadStreamContext WQVadStreamContext;
 
 /**
  * Create a new WQVad context with Silero VAD V5
@@ -157,6 +158,41 @@ int wqvad_segment_audio(WQVadContext* context,
  * @param endSamples End samples array to free
  */
 void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples);
+
+/**
+ * Create a streaming context for continuous audio processing
+ * @param vadContext The main VAD context
+ * @param outputDir Directory to save detected segments
+ * @param sampleRate Sample rate of the audio stream
+ * @return Stream context pointer, NULL on failure
+ */
+WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
+                                               const char* outputDir,
+                                               int sampleRate);
+
+/**
+ * Process a chunk of streaming audio
+ * @param streamContext Stream context
+ * @param audioData Float audio samples
+ * @param numSamples Number of samples in this chunk
+ * @return Number of new segments detected in this chunk, -1 on error
+ */
+int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
+                              const float* audioData,
+                              size_t numSamples);
+
+/**
+ * Finalize streaming and save any remaining segments
+ * @param streamContext Stream context
+ * @return Total number of segments detected, -1 on error
+ */
+int wqvad_finalize_stream(WQVadStreamContext* streamContext);
+
+/**
+ * Destroy stream context
+ * @param streamContext Stream context to destroy
+ */
+void wqvad_destroy_stream_context(WQVadStreamContext* streamContext);
 
 #ifdef __cplusplus
 }

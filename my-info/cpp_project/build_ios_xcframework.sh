@@ -64,6 +64,7 @@ extern "C" {
 // WQVad C API for Objective-C integration
 
 typedef struct WQVadContext WQVadContext;
+typedef struct WQVadStreamContext WQVadStreamContext;
 
 /**
  * Create a new WQVad context with Silero VAD V5
@@ -211,6 +212,41 @@ int wqvad_segment_audio(WQVadContext* context,
  */
 void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples);
 
+/**
+ * Create a streaming context for continuous audio processing
+ * @param vadContext The main VAD context
+ * @param outputDir Directory to save detected segments
+ * @param sampleRate Sample rate of the audio stream
+ * @return Stream context pointer, NULL on failure
+ */
+WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
+                                               const char* outputDir,
+                                               int sampleRate);
+
+/**
+ * Process a chunk of streaming audio
+ * @param streamContext Stream context
+ * @param audioData Float audio samples
+ * @param numSamples Number of samples in this chunk
+ * @return Number of new segments detected in this chunk, -1 on error
+ */
+int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
+                              const float* audioData,
+                              size_t numSamples);
+
+/**
+ * Finalize streaming and save any remaining segments
+ * @param streamContext Stream context
+ * @return Total number of segments detected, -1 on error
+ */
+int wqvad_finalize_stream(WQVadStreamContext* streamContext);
+
+/**
+ * Destroy stream context
+ * @param streamContext Stream context to destroy
+ */
+void wqvad_destroy_stream_context(WQVadStreamContext* streamContext);
+
 #ifdef __cplusplus
 }
 #endif
@@ -235,6 +271,20 @@ using namespace wqvad;
 struct WQVadContext {
     std::unique_ptr<SileroVAD> vad;
     VadConfig config;
+};
+
+struct WQVadStreamContext {
+    WQVadContext* vadContext;
+    std::string outputDir;
+    int sampleRate;
+    size_t totalSamplesProcessed;
+    int segmentCounter;
+    std::vector<float> accumulatedAudio;  // Store all audio for segment extraction
+    bool inSpeech;
+    size_t speechStartSample;
+    size_t speechEndSample;
+    int consecutiveSilenceWindows;  // Track consecutive silence windows
+    int consecutiveSpeechWindows;  // Track consecutive speech windows
 };
 
 // Helper function to segment audio data based on VAD results
@@ -343,7 +393,7 @@ WQVadContext* wqvad_create_from_file(const char* modelPath, float threshold) {
         context->config.threshold = threshold;
         context->config.sampleRate = 16000;
         context->config.minSpeechDurationMs = 250;
-        context->config.minSilenceDurationMs = 100;
+        context->config.minSilenceDurationMs = 100;  // Keep original value
         context->config.speechPadMs = 30;
         context->config.maxSpeechDurationS = 30.0f;
         
@@ -549,6 +599,281 @@ int wqvad_segment_audio(WQVadContext* context,
 void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples) {
     free(startSamples);
     free(endSamples);
+}
+
+WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
+                                               const char* outputDir,
+                                               int sampleRate) {
+    if (!vadContext || !outputDir) {
+        return nullptr;
+    }
+    
+    try {
+        auto streamContext = std::make_unique<WQVadStreamContext>();
+        streamContext->vadContext = vadContext;
+        streamContext->outputDir = outputDir;
+        streamContext->sampleRate = sampleRate;
+        streamContext->totalSamplesProcessed = 0;
+        streamContext->segmentCounter = 0;
+        streamContext->inSpeech = false;
+        streamContext->speechStartSample = 0;
+        streamContext->speechEndSample = 0;
+        streamContext->consecutiveSilenceWindows = 0;
+        streamContext->consecutiveSpeechWindows = 0;
+        
+        // Reset VAD state for new stream
+        vadContext->vad->reset();
+        
+        return streamContext.release();
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
+                              const float* audioData,
+                              size_t numSamples) {
+    if (!streamContext || !audioData) {
+        return -1;
+    }
+    
+    try {
+        // Store audio for later segment extraction
+        streamContext->accumulatedAudio.insert(
+            streamContext->accumulatedAudio.end(),
+            audioData,
+            audioData + numSamples
+        );
+        
+        int newSegments = 0;
+        
+        // Process in 512-sample windows (required by Silero VAD for 16kHz)
+        const size_t windowSize = 512;
+        // Calculate how many consecutive windows we need for minimum durations
+        const int minSilenceWindows = (streamContext->sampleRate * streamContext->vadContext->config.minSilenceDurationMs / 1000) / windowSize + 1;
+        const int minSpeechWindows = 2; // Require at least 2 consecutive speech windows to start a segment
+        
+        for (size_t offset = 0; offset < numSamples; offset += windowSize) {
+            if (offset + windowSize > numSamples) {
+                // Not enough samples for a full window, save for next chunk
+                break;
+            }
+            
+            std::vector<float> window(audioData + offset, audioData + offset + windowSize);
+            VadResult result = streamContext->vadContext->vad->processChunk(window);
+            
+            size_t currentSample = streamContext->totalSamplesProcessed + offset;
+            
+            if (result.isVoiceDetected) {
+                streamContext->consecutiveSpeechWindows++;
+                streamContext->consecutiveSilenceWindows = 0;
+                
+                if (!streamContext->inSpeech && streamContext->consecutiveSpeechWindows >= minSpeechWindows) {
+                    // Start of speech - require multiple consecutive speech windows
+                    streamContext->inSpeech = true;
+                    // Go back to the start of the first speech window
+                    streamContext->speechStartSample = currentSample - (streamContext->consecutiveSpeechWindows - 1) * windowSize;
+                    std::cout << "🎤 Speech started at sample " << streamContext->speechStartSample 
+                             << " (prob: " << result.probability << ")" << std::endl;
+                }
+                
+                if (streamContext->inSpeech) {
+                    // Update speech end to current position
+                    streamContext->speechEndSample = currentSample + windowSize;
+                }
+            } else {
+                streamContext->consecutiveSilenceWindows++;
+                streamContext->consecutiveSpeechWindows = 0;
+                
+                if (streamContext->inSpeech && streamContext->consecutiveSilenceWindows >= minSilenceWindows) {
+                    // End of speech - we've had enough consecutive silence windows
+                    streamContext->inSpeech = false;
+                    
+                    // Check minimum speech duration
+                    size_t speechDuration = streamContext->speechEndSample - streamContext->speechStartSample;
+                    size_t minSpeechSamples = streamContext->sampleRate * 
+                        streamContext->vadContext->config.minSpeechDurationMs / 1000;
+                    
+                    if (speechDuration >= minSpeechSamples) {
+                        // Save segment
+                        size_t segmentStart = streamContext->speechStartSample;
+                        size_t segmentEnd = streamContext->speechEndSample;
+                        
+                        // Apply speech padding
+                        int padSamples = streamContext->sampleRate * streamContext->vadContext->config.speechPadMs / 1000;
+                        if (segmentStart >= padSamples) {
+                            segmentStart -= padSamples;
+                        } else {
+                            segmentStart = 0;
+                        }
+                        
+                        if (segmentEnd + padSamples <= streamContext->accumulatedAudio.size()) {
+                            segmentEnd += padSamples;
+                        } else {
+                            segmentEnd = streamContext->accumulatedAudio.size();
+                        }
+                        
+                        if (segmentEnd > segmentStart && segmentEnd <= streamContext->accumulatedAudio.size()) {
+                            streamContext->segmentCounter++;
+                            std::string filename = streamContext->outputDir + "/segment_" + 
+                                                 std::to_string(streamContext->segmentCounter) + ".wav";
+                            
+                            // Write WAV file
+                            std::ofstream file(filename, std::ios::binary);
+                            if (file.is_open()) {
+                                // WAV header
+                                struct WavHeader {
+                                    char riff[4] = {'R', 'I', 'F', 'F'};
+                                    uint32_t fileSize;
+                                    char wave[4] = {'W', 'A', 'V', 'E'};
+                                    char fmt[4] = {'f', 'm', 't', ' '};
+                                    uint32_t fmtSize = 16;
+                                    uint16_t audioFormat = 1;
+                                    uint16_t numChannels = 1;
+                                    uint32_t sampleRate;
+                                    uint32_t byteRate;
+                                    uint16_t blockAlign = 2;
+                                    uint16_t bitsPerSample = 16;
+                                    char data[4] = {'d', 'a', 't', 'a'};
+                                    uint32_t dataSize;
+                                } header;
+                                
+                                size_t segmentLength = segmentEnd - segmentStart;
+                                header.sampleRate = streamContext->sampleRate;
+                                header.byteRate = streamContext->sampleRate * 2;
+                                header.dataSize = segmentLength * 2;
+                                header.fileSize = header.dataSize + sizeof(WavHeader) - 8;
+                                
+                                // Convert float to PCM
+                                std::vector<int16_t> pcmData(segmentLength);
+                                for (size_t i = 0; i < segmentLength; ++i) {
+                                    float sample = streamContext->accumulatedAudio[segmentStart + i];
+                                    sample = std::max(-1.0f, std::min(1.0f, sample));
+                                    pcmData[i] = static_cast<int16_t>(sample * 32767.0f);
+                                }
+                                
+                                file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+                                file.write(reinterpret_cast<const char*>(pcmData.data()), 
+                                         pcmData.size() * sizeof(int16_t));
+                                
+                                file.close();
+                                std::cout << "💾 Saved segment " << streamContext->segmentCounter 
+                                         << " to: " << filename 
+                                         << " (duration: " << (float)segmentLength/streamContext->sampleRate << "s)"
+                                         << std::endl;
+                                newSegments++;
+                            }
+                        }
+                    } else {
+                        std::cout << "⚠️ Skipping short segment (duration: " 
+                                 << (float)speechDuration/streamContext->sampleRate << "s)" << std::endl;
+                    }
+                    
+                    // Reset consecutive counters
+                    streamContext->consecutiveSilenceWindows = 0;
+                    streamContext->consecutiveSpeechWindows = 0;
+                }
+            }
+        }
+        
+        streamContext->totalSamplesProcessed += numSamples;
+        return newSegments;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
+    if (!streamContext) {
+        return -1;
+    }
+    
+    try {
+        // If we're still in speech, save the final segment
+        if (streamContext->inSpeech && streamContext->speechStartSample < streamContext->accumulatedAudio.size()) {
+            // Use the last speech end sample or the end of audio
+            size_t segmentEnd = streamContext->speechEndSample > 0 ? 
+                               streamContext->speechEndSample : 
+                               streamContext->accumulatedAudio.size();
+            size_t segmentStart = streamContext->speechStartSample;
+            
+            // Check minimum speech duration
+            size_t speechDuration = segmentEnd - segmentStart;
+            size_t minSpeechSamples = streamContext->sampleRate * 
+                streamContext->vadContext->config.minSpeechDurationMs / 1000;
+            
+            if (speechDuration >= minSpeechSamples) {
+                // Apply speech padding
+                int padSamples = streamContext->sampleRate * streamContext->vadContext->config.speechPadMs / 1000;
+                if (segmentStart >= padSamples) {
+                    segmentStart -= padSamples;
+                } else {
+                    segmentStart = 0;
+                }
+                
+                if (segmentEnd + padSamples <= streamContext->accumulatedAudio.size()) {
+                    segmentEnd += padSamples;
+                } else {
+                    segmentEnd = streamContext->accumulatedAudio.size();
+                }
+                
+                streamContext->segmentCounter++;
+                std::string filename = streamContext->outputDir + "/segment_" + 
+                                     std::to_string(streamContext->segmentCounter) + ".wav";
+                
+                // Write final segment
+                std::ofstream file(filename, std::ios::binary);
+                if (file.is_open()) {
+                    struct WavHeader {
+                        char riff[4] = {'R', 'I', 'F', 'F'};
+                        uint32_t fileSize;
+                        char wave[4] = {'W', 'A', 'V', 'E'};
+                        char fmt[4] = {'f', 'm', 't', ' '};
+                        uint32_t fmtSize = 16;
+                        uint16_t audioFormat = 1;
+                        uint16_t numChannels = 1;
+                        uint32_t sampleRate;
+                        uint32_t byteRate;
+                        uint16_t blockAlign = 2;
+                        uint16_t bitsPerSample = 16;
+                        char data[4] = {'d', 'a', 't', 'a'};
+                        uint32_t dataSize;
+                    } header;
+                    
+                    size_t segmentLength = segmentEnd - segmentStart;
+                    header.sampleRate = streamContext->sampleRate;
+                    header.byteRate = streamContext->sampleRate * 2;
+                    header.dataSize = segmentLength * 2;
+                    header.fileSize = header.dataSize + sizeof(WavHeader) - 8;
+                    
+                    std::vector<int16_t> pcmData(segmentLength);
+                    for (size_t i = 0; i < segmentLength; ++i) {
+                        float sample = streamContext->accumulatedAudio[segmentStart + i];
+                        sample = std::max(-1.0f, std::min(1.0f, sample));
+                        pcmData[i] = static_cast<int16_t>(sample * 32767.0f);
+                    }
+                    
+                    file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+                    file.write(reinterpret_cast<const char*>(pcmData.data()), 
+                             pcmData.size() * sizeof(int16_t));
+                    
+                    file.close();
+                    std::cout << "💾 Saved final segment " << streamContext->segmentCounter 
+                             << " to: " << filename 
+                             << " (duration: " << (float)segmentLength/streamContext->sampleRate << "s)"
+                             << std::endl;
+                }
+            }
+        }
+        
+        return streamContext->segmentCounter;
+    } catch (...) {
+        return -1;
+    }
+}
+
+void wqvad_destroy_stream_context(WQVadStreamContext* streamContext) {
+    delete streamContext;
 }
 
 } // extern "C"
