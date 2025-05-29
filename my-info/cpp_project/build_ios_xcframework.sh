@@ -224,6 +224,19 @@ WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
                                                int sampleRate);
 
 /**
+ * Create a streaming context for continuous audio processing with custom output sample rate
+ * @param vadContext The main VAD context
+ * @param outputDir Directory to save detected segments
+ * @param sampleRate Sample rate of the audio stream
+ * @param outputSampleRate Sample rate for saved WAV files (16000, 24000, 44100, 48000)
+ * @return Stream context pointer, NULL on failure
+ */
+WQVadStreamContext* wqvad_create_stream_context_ex(WQVadContext* vadContext,
+                                                  const char* outputDir,
+                                                  int sampleRate,
+                                                  int outputSampleRate);
+
+/**
  * Process a chunk of streaming audio
  * @param streamContext Stream context
  * @param audioData Float audio samples
@@ -290,6 +303,7 @@ struct WQVadStreamContext {
     WQVadContext* vadContext;
     std::string outputDir;
     int sampleRate;
+    int outputSampleRate;
     size_t totalSamplesProcessed;
     int segmentCounter;
     std::vector<float> accumulatedAudio;  // Store all audio for segment extraction
@@ -617,6 +631,13 @@ void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples) {
 WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
                                                const char* outputDir,
                                                int sampleRate) {
+    return wqvad_create_stream_context_ex(vadContext, outputDir, sampleRate, 16000);
+}
+
+WQVadStreamContext* wqvad_create_stream_context_ex(WQVadContext* vadContext,
+                                                  const char* outputDir,
+                                                  int sampleRate,
+                                                  int outputSampleRate) {
     if (!vadContext || !outputDir) {
         return nullptr;
     }
@@ -625,7 +646,8 @@ WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
         auto streamContext = std::make_unique<WQVadStreamContext>();
         streamContext->vadContext = vadContext;
         streamContext->outputDir = outputDir;
-        streamContext->sampleRate = 16000;  // Always use 16kHz since we resample to this rate
+        streamContext->sampleRate = 16000;  // Always use 16kHz internally for VAD
+        streamContext->outputSampleRate = outputSampleRate;  // Use specified rate for output
         streamContext->totalSamplesProcessed = 0;
         streamContext->segmentCounter = 0;
         streamContext->inSpeech = false;
@@ -731,6 +753,33 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                             std::string filename = streamContext->outputDir + "/segment_" + 
                                                  std::to_string(streamContext->segmentCounter) + ".wav";
                             
+                            // Extract segment audio
+                            size_t segmentLength = segmentEnd - segmentStart;
+                            std::vector<float> segmentAudio(segmentLength);
+                            std::copy(streamContext->accumulatedAudio.begin() + segmentStart,
+                                     streamContext->accumulatedAudio.begin() + segmentEnd,
+                                     segmentAudio.begin());
+                            
+                            // Resample to output sample rate if needed
+                            std::vector<float> outputAudio;
+                            if (streamContext->outputSampleRate != streamContext->sampleRate) {
+                                float resampleRatio = (float)streamContext->outputSampleRate / streamContext->sampleRate;
+                                size_t outputLength = static_cast<size_t>(segmentLength * resampleRatio);
+                                outputAudio.resize(outputLength);
+                                
+                                for (size_t i = 0; i < outputLength; i++) {
+                                    float srcIndex = i / resampleRatio;
+                                    size_t index1 = static_cast<size_t>(srcIndex);
+                                    size_t index2 = std::min(index1 + 1, segmentLength - 1);
+                                    float fraction = srcIndex - index1;
+                                    
+                                    outputAudio[i] = segmentAudio[index1] * (1.0f - fraction) + 
+                                                    segmentAudio[index2] * fraction;
+                                }
+                            } else {
+                                outputAudio = segmentAudio;
+                            }
+                            
                             // Write WAV file
                             std::ofstream file(filename, std::ios::binary);
                             if (file.is_open()) {
@@ -751,16 +800,15 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                                     uint32_t dataSize;
                                 } header;
                                 
-                                size_t segmentLength = segmentEnd - segmentStart;
-                                header.sampleRate = streamContext->sampleRate;
-                                header.byteRate = streamContext->sampleRate * 2;
-                                header.dataSize = segmentLength * 2;
+                                header.sampleRate = streamContext->outputSampleRate;
+                                header.byteRate = streamContext->outputSampleRate * 2;
+                                header.dataSize = outputAudio.size() * 2;
                                 header.fileSize = header.dataSize + sizeof(WavHeader) - 8;
                                 
                                 // Convert float to PCM
-                                std::vector<int16_t> pcmData(segmentLength);
-                                for (size_t i = 0; i < segmentLength; ++i) {
-                                    float sample = streamContext->accumulatedAudio[segmentStart + i];
+                                std::vector<int16_t> pcmData(outputAudio.size());
+                                for (size_t i = 0; i < outputAudio.size(); ++i) {
+                                    float sample = outputAudio[i];
                                     sample = std::max(-1.0f, std::min(1.0f, sample));
                                     pcmData[i] = static_cast<int16_t>(sample * 32767.0f);
                                 }
@@ -772,7 +820,8 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                                 file.close();
                                 std::cout << "💾 Saved segment " << streamContext->segmentCounter 
                                          << " to: " << filename 
-                                         << " (duration: " << (float)segmentLength/streamContext->sampleRate << "s)"
+                                         << " (duration: " << (float)outputAudio.size()/streamContext->outputSampleRate << "s)"
+                                         << " @ " << streamContext->outputSampleRate << "Hz"
                                          << std::endl;
                                 newSegments++;
                             }
@@ -834,6 +883,33 @@ int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
                 std::string filename = streamContext->outputDir + "/segment_" + 
                                      std::to_string(streamContext->segmentCounter) + ".wav";
                 
+                // Extract segment audio
+                size_t segmentLength = segmentEnd - segmentStart;
+                std::vector<float> segmentAudio(segmentLength);
+                std::copy(streamContext->accumulatedAudio.begin() + segmentStart,
+                         streamContext->accumulatedAudio.begin() + segmentEnd,
+                         segmentAudio.begin());
+                
+                // Resample to output sample rate if needed
+                std::vector<float> outputAudio;
+                if (streamContext->outputSampleRate != streamContext->sampleRate) {
+                    float resampleRatio = (float)streamContext->outputSampleRate / streamContext->sampleRate;
+                    size_t outputLength = static_cast<size_t>(segmentLength * resampleRatio);
+                    outputAudio.resize(outputLength);
+                    
+                    for (size_t i = 0; i < outputLength; i++) {
+                        float srcIndex = i / resampleRatio;
+                        size_t index1 = static_cast<size_t>(srcIndex);
+                        size_t index2 = std::min(index1 + 1, segmentLength - 1);
+                        float fraction = srcIndex - index1;
+                        
+                        outputAudio[i] = segmentAudio[index1] * (1.0f - fraction) + 
+                                        segmentAudio[index2] * fraction;
+                    }
+                } else {
+                    outputAudio = segmentAudio;
+                }
+                
                 // Write final segment
                 std::ofstream file(filename, std::ios::binary);
                 if (file.is_open()) {
@@ -853,15 +929,14 @@ int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
                         uint32_t dataSize;
                     } header;
                     
-                    size_t segmentLength = segmentEnd - segmentStart;
-                    header.sampleRate = streamContext->sampleRate;
-                    header.byteRate = streamContext->sampleRate * 2;
-                    header.dataSize = segmentLength * 2;
+                    header.sampleRate = streamContext->outputSampleRate;
+                    header.byteRate = streamContext->outputSampleRate * 2;
+                    header.dataSize = outputAudio.size() * 2;
                     header.fileSize = header.dataSize + sizeof(WavHeader) - 8;
                     
-                    std::vector<int16_t> pcmData(segmentLength);
-                    for (size_t i = 0; i < segmentLength; ++i) {
-                        float sample = streamContext->accumulatedAudio[segmentStart + i];
+                    std::vector<int16_t> pcmData(outputAudio.size());
+                    for (size_t i = 0; i < outputAudio.size(); ++i) {
+                        float sample = outputAudio[i];
                         sample = std::max(-1.0f, std::min(1.0f, sample));
                         pcmData[i] = static_cast<int16_t>(sample * 32767.0f);
                     }
@@ -873,7 +948,8 @@ int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
                     file.close();
                     std::cout << "💾 Saved final segment " << streamContext->segmentCounter 
                              << " to: " << filename 
-                             << " (duration: " << (float)segmentLength/streamContext->sampleRate << "s)"
+                             << " (duration: " << (float)outputAudio.size()/streamContext->outputSampleRate << "s)"
+                             << " @ " << streamContext->outputSampleRate << "Hz"
                              << std::endl;
                 }
             }

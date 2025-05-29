@@ -171,6 +171,19 @@ WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
                                                int sampleRate);
 
 /**
+ * Create a streaming context for continuous audio processing with custom output sample rate
+ * @param vadContext The main VAD context
+ * @param outputDir Directory to save detected segments
+ * @param sampleRate Sample rate of the audio stream
+ * @param outputSampleRate Sample rate for saved WAV files (16000, 24000, 44100, 48000)
+ * @return Stream context pointer, NULL on failure
+ */
+WQVadStreamContext* wqvad_create_stream_context_ex(WQVadContext* vadContext,
+                                                  const char* outputDir,
+                                                  int sampleRate,
+                                                  int outputSampleRate);
+
+/**
  * Process a chunk of streaming audio
  * @param streamContext Stream context
  * @param audioData Float audio samples
