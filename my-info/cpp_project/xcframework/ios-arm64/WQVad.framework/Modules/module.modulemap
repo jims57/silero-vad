@@ -1,0 +1,11 @@
+framework module WQVad {
+    umbrella header "WQVad.h"
+    export *
+    module * { export * }
+    
+    explicit module WQVadCPP {
+        header "wqvad.h"
+        header "types.h"
+        requires cplusplus
+    }
+}
