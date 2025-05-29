@@ -425,10 +425,6 @@ cp ${BUILD_DIR}/ios-arm64/lib${LIBRARY_NAME}_with_wrapper.a ${FRAMEWORK_NAME}.xc
 mkdir -p ${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers
 cp ${BUILD_DIR}/temp_headers/WQVad.h ${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers/
 
-# Copy the model to a Resources folder
-mkdir -p ${FRAMEWORK_NAME}.xcframework/ios-arm64/Resources
-cp ${SILERO_MODEL_PATH} ${FRAMEWORK_NAME}.xcframework/ios-arm64/Resources/
-
 # Create Info.plist for XCFramework (minimal, just for the xcframework itself)
 cat > ${FRAMEWORK_NAME}.xcframework/Info.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
