@@ -2,6 +2,7 @@
 #include "internal/wqvad_impl.h"
 #include <memory>
 #include <iostream>
+#include <fstream>
 
 namespace wqvad {
 
@@ -48,6 +49,7 @@ private:
     
 public:
     Impl() : env(ORT_LOGGING_LEVEL_WARNING, "SileroVAD") {
+        std::cout << "🔧 SileroVAD::Impl() constructor called" << std::endl;
         session_options.SetIntraOpNumThreads(1);
         session_options.SetInterOpNumThreads(1);
         session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -55,20 +57,37 @@ public:
         _state.resize(size_state, 0.0f);
         _context.assign(context_samples, 0.0f);
         sr.resize(1);
+        std::cout << "✅ SileroVAD::Impl() constructor completed" << std::endl;
     }
     
     bool initialize(const VadConfig& cfg, const std::string& modelPath) {
+        std::cout << "🔧 SileroVAD::initialize() called with model path: " << modelPath << std::endl;
         config = cfg;
         
+        // Check if model file exists
+        std::ifstream modelFile(modelPath, std::ios::binary);
+        if (!modelFile.is_open()) {
+            std::cerr << "❌ Model file does not exist or cannot be opened: " << modelPath << std::endl;
+            return false;
+        }
+        modelFile.close();
+        std::cout << "✅ Model file exists and can be opened" << std::endl;
+        
         try {
+            std::cout << "🔧 Creating ONNX session..." << std::endl;
             // Create ONNX session
             session = std::make_shared<Ort::Session>(env, modelPath.c_str(), session_options);
+            std::cout << "✅ ONNX session created successfully" << std::endl;
             
             // Setup audio parameters
             sr_per_ms = config.sampleRate / 1000;  // 16000 / 1000 = 16
             window_size_samples = 32 * sr_per_ms;  // 32ms * 16 = 512 samples
             effective_window_size = window_size_samples + context_samples; // 512 + 64 = 576
             sr[0] = config.sampleRate;
+            
+            std::cout << "🔧 Audio parameters: sampleRate=" << config.sampleRate 
+                      << ", window_size_samples=" << window_size_samples 
+                      << ", effective_window_size=" << effective_window_size << std::endl;
             
             // Setup timing parameters
             min_speech_samples = sr_per_ms * config.minSpeechDurationMs;
@@ -77,10 +96,13 @@ public:
             min_silence_samples_at_max_speech = sr_per_ms * 98;
             speech_pad_samples = config.speechPadMs * sr_per_ms;
             
+            std::cout << "✅ Timing parameters configured" << std::endl;
+            
             reset();
+            std::cout << "✅ SileroVAD initialized successfully" << std::endl;
             return true;
         } catch (const std::exception& e) {
-            std::cerr << "Failed to initialize Silero VAD: " << e.what() << std::endl;
+            std::cerr << "❌ Failed to initialize Silero VAD: " << e.what() << std::endl;
             return false;
         }
     }
@@ -91,9 +113,11 @@ public:
             std::chrono::steady_clock::now().time_since_epoch()).count();
             
         if (audioChunk.size() != window_size_samples) {
-            std::cerr << "Invalid chunk size: " << audioChunk.size() << ", expected: " << window_size_samples << std::endl;
+            std::cerr << "❌ Invalid chunk size: " << audioChunk.size() << ", expected: " << window_size_samples << std::endl;
             return result;
         }
+        
+        std::cout << "🔧 Processing audio chunk of size: " << audioChunk.size() << std::endl;
         
         try {
             // Build input with context
@@ -124,6 +148,7 @@ public:
             input_tensors.push_back(std::move(sr_tensor));
             
             // Run inference
+            std::cout << "🔧 Running ONNX inference..." << std::endl;
             auto output_tensors = session->Run(
                 Ort::RunOptions{nullptr},
                 input_node_names.data(), input_tensors.data(), input_tensors.size(),
@@ -132,6 +157,8 @@ public:
             // Extract results
             float speech_prob = output_tensors[0].GetTensorMutableData<float>()[0];
             float* stateN = output_tensors[1].GetTensorMutableData<float>();
+            
+            std::cout << "✅ ONNX inference completed, speech probability: " << speech_prob << std::endl;
             
             // Update state and context
             std::memcpy(_state.data(), stateN, size_state * sizeof(float));
@@ -143,8 +170,11 @@ public:
             result.isVoiceDetected = speech_prob >= config.threshold;
             processVadLogic(speech_prob);
             
+            std::cout << "✅ VAD result: isVoice=" << result.isVoiceDetected 
+                      << ", probability=" << result.probability << std::endl;
+            
         } catch (const std::exception& e) {
-            std::cerr << "Error during VAD processing: " << e.what() << std::endl;
+            std::cerr << "❌ Error during VAD processing: " << e.what() << std::endl;
         }
         
         return result;

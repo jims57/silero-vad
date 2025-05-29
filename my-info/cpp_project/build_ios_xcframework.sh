@@ -48,7 +48,7 @@ mkdir -p ${XCFRAMEWORK_DIR}
 # Create temporary include directory for compilation
 mkdir -p ${BUILD_DIR}/temp_headers
 
-# Create WQVad.h header first (needed for C wrapper compilation)
+# Create WQVad.h header first (needed for C wrapper compilation) - PURE C ONLY
 echo -e "${YELLOW}Creating WQVad header file...${NC}"
 cat > ${BUILD_DIR}/temp_headers/WQVad.h << 'EOF'
 #ifndef WQVad_h
@@ -441,66 +441,51 @@ else
     echo -e "${RED}❌ ONNX Runtime library not found, using WQVad only${NC}"
 fi
 
-# Copy main header file to framework
+# Copy ONLY the pure C header file to framework (NO C++ headers)
+echo -e "${YELLOW}Copying ONLY pure C header...${NC}"
 cp ${BUILD_DIR}/temp_headers/WQVad.h ${IOS_FRAMEWORK_DIR}/Headers/
 
-# Copy public headers
-echo -e "${YELLOW}Copying public headers...${NC}"
-cp -r include/wqvad/* ${IOS_FRAMEWORK_DIR}/Headers/
-
-# Copy ONNX Runtime headers (required for compilation)
-ONNXRUNTIME_HEADERS="${ONNXRUNTIME_PATH}/ios-arm64/onnxruntime.framework/Headers"
-if [ -d "${ONNXRUNTIME_HEADERS}" ]; then
-    cp -r ${ONNXRUNTIME_HEADERS}/* ${IOS_FRAMEWORK_DIR}/Headers/
-    echo -e "${GREEN}✅ Copied ONNX Runtime headers${NC}"
-fi
+# DO NOT copy any C++ headers - this is the key fix
+echo -e "${GREEN}✅ Skipping C++ headers to maintain pure C interface${NC}"
 
 # Copy Silero model to Resources
 echo -e "${YELLOW}Copying Silero VAD V5 model to framework resources...${NC}"
 cp ${SILERO_MODEL_PATH} ${IOS_FRAMEWORK_DIR}/Resources/
 
-# Create Info.plist for iOS Device
-cat > ${IOS_FRAMEWORK_DIR}/Info.plist << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>${FRAMEWORK_NAME}</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.wq.${FRAMEWORK_NAME}</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>${FRAMEWORK_NAME}</string>
-    <key>CFBundlePackageType</key>
-    <string>FMWK</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>MinimumOSVersion</key>
-    <string>12.0</string>
-    <key>CFBundleSupportedPlatforms</key>
-    <array>
-        <string>iPhoneOS</string>
-    </array>
-</dict>
-</plist>
-EOF
+# Create Info.plist using Xcode's plutil command (Apple's recommended way)
+echo -e "${YELLOW}Creating Info.plist using Apple's plutil...${NC}"
+/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.wq.WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleName string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.0.0" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string FMWK" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 12.0" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :DTPlatformName string iphoneos" ${IOS_FRAMEWORK_DIR}/Info.plist
+/usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos" ${IOS_FRAMEWORK_DIR}/Info.plist
 
-# Create module.modulemap
+# Validate the plist
+echo -e "${YELLOW}Validating Info.plist...${NC}"
+if plutil -lint ${IOS_FRAMEWORK_DIR}/Info.plist; then
+    echo -e "${GREEN}✅ Info.plist validation passed${NC}"
+    # Convert to XML format and check size
+    plutil -convert xml1 ${IOS_FRAMEWORK_DIR}/Info.plist
+    echo "Final Info.plist size: $(wc -c < ${IOS_FRAMEWORK_DIR}/Info.plist) bytes"
+else
+    echo -e "${RED}❌ Info.plist validation failed${NC}"
+    exit 1
+fi
+
+# Create pure C module.modulemap (no C++ module)
 cat > ${IOS_FRAMEWORK_DIR}/Modules/module.modulemap << EOF
 framework module ${FRAMEWORK_NAME} {
     umbrella header "${FRAMEWORK_NAME}.h"
     export *
     module * { export * }
-    
-    explicit module WQVadCPP {
-        header "wqvad.h"
-        header "types.h"
-        requires cplusplus
-    }
 }
 EOF
 
@@ -544,28 +529,5 @@ rm -rf ${BUILD_DIR}
 rm -rf ${XCFRAMEWORK_DIR}
 
 echo -e "${GREEN}🎉 Build completed successfully!${NC}"
-echo -e "${GREEN}You can now drag ${FRAMEWORK_NAME}.xcframework into your iOS project.${NC}"
-echo -e "${GREEN}The framework includes:${NC}"
-echo -e "${GREEN}- Silero VAD V5 model bundled in Resources${NC}"
-echo -e "${GREEN}- ONNX Runtime statically linked${NC}"
-echo -e "${GREEN}- C API for Objective-C integration${NC}"
-echo -e "${GREEN}- C++ API for advanced usage${NC}"
-
-# Show usage example
-echo -e "${YELLOW}Usage in your iOS project:${NC}"
-echo -e "${GREEN}1. Drag WQVad.xcframework to your project${NC}"
-echo -e "${GREEN}2. Import: #import <WQVad/WQVad.h>${NC}"
-echo -e "${GREEN}3. Use: ${NC}"
-cat << 'EOF'
-// Get model path from framework bundle
-NSBundle *frameworkBundle = [NSBundle bundleForClass:[YourClass class]];
-NSString *modelPath = [frameworkBundle pathForResource:@"silero_vad_v5" ofType:@"onnx"];
-WQVadContext *vad = wqvad_create_from_file([modelPath UTF8String], 0.5);
-
-// Process audio (512 samples of 16kHz float audio)
-float probability;
-int isVoice = wqvad_process_chunk(vad, audioSamples, 512, &probability);
-
-// Clean up
-wqvad_destroy(vad);
-EOF
+echo -e "${GREEN}Pure C interface framework created - no C++ headers exposed!${NC}"
+echo -e "${GREEN}You can now use it in pure Objective-C (.m files)${NC}"
