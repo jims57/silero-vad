@@ -1,5 +1,0 @@
-framework module WQVad {
-    umbrella header "WQVad.h"
-    export *
-    module * { export * }
-}

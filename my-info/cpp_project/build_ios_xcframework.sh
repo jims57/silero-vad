@@ -414,110 +414,73 @@ rm -rf temp_objects
 
 cd ../..
 
-# Create Framework structure for iOS Device
-echo -e "${YELLOW}Creating framework structure for iOS Device...${NC}"
-IOS_FRAMEWORK_DIR="${XCFRAMEWORK_DIR}/ios-arm64/${FRAMEWORK_NAME}.framework"
-mkdir -p ${IOS_FRAMEWORK_DIR}/Headers
-mkdir -p ${IOS_FRAMEWORK_DIR}/Modules
-mkdir -p ${IOS_FRAMEWORK_DIR}/Resources
+# Create XCFramework directory structure for static library
+echo -e "${YELLOW}Creating XCFramework from static library...${NC}"
+mkdir -p ${FRAMEWORK_NAME}.xcframework/ios-arm64
 
-# Copy the combined library
-cp ${BUILD_DIR}/ios-arm64/lib${LIBRARY_NAME}_with_wrapper.a ${IOS_FRAMEWORK_DIR}/${FRAMEWORK_NAME}
+# Copy the static library directly
+cp ${BUILD_DIR}/ios-arm64/lib${LIBRARY_NAME}_with_wrapper.a ${FRAMEWORK_NAME}.xcframework/ios-arm64/lib${FRAMEWORK_NAME}.a
 
-# Extract ONNX Runtime library from XCFramework and combine
-echo -e "${YELLOW}Combining WQVad with ONNX Runtime library...${NC}"
-ONNXRUNTIME_LIB="${ONNXRUNTIME_PATH}/ios-arm64/onnxruntime.framework/onnxruntime"
-if [ -f "${ONNXRUNTIME_LIB}" ]; then
-    # Create a combined library that includes both wqvad and onnxruntime
-    libtool -static -o ${IOS_FRAMEWORK_DIR}/${FRAMEWORK_NAME}_combined \
-        ${BUILD_DIR}/ios-arm64/lib${LIBRARY_NAME}_with_wrapper.a \
-        ${ONNXRUNTIME_LIB}
-    
-    # Replace the original with the combined library
-    mv ${IOS_FRAMEWORK_DIR}/${FRAMEWORK_NAME}_combined ${IOS_FRAMEWORK_DIR}/${FRAMEWORK_NAME}
-    
-    echo -e "${GREEN}✅ Successfully combined libraries${NC}"
-else
-    echo -e "${RED}❌ ONNX Runtime library not found, using WQVad only${NC}"
-fi
+# Copy headers to a separate headers folder
+mkdir -p ${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers
+cp ${BUILD_DIR}/temp_headers/WQVad.h ${FRAMEWORK_NAME}.xcframework/ios-arm64/Headers/
 
-# Copy ONLY the pure C header file to framework (NO C++ headers)
-echo -e "${YELLOW}Copying ONLY pure C header...${NC}"
-cp ${BUILD_DIR}/temp_headers/WQVad.h ${IOS_FRAMEWORK_DIR}/Headers/
+# Copy the model to a Resources folder
+mkdir -p ${FRAMEWORK_NAME}.xcframework/ios-arm64/Resources
+cp ${SILERO_MODEL_PATH} ${FRAMEWORK_NAME}.xcframework/ios-arm64/Resources/
 
-# DO NOT copy any C++ headers - this is the key fix
-echo -e "${GREEN}✅ Skipping C++ headers to maintain pure C interface${NC}"
-
-# Copy Silero model to Resources
-echo -e "${YELLOW}Copying Silero VAD V5 model to framework resources...${NC}"
-cp ${SILERO_MODEL_PATH} ${IOS_FRAMEWORK_DIR}/Resources/
-
-# Create Info.plist using Xcode's plutil command (Apple's recommended way)
-echo -e "${YELLOW}Creating Info.plist using Apple's plutil...${NC}"
-/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.wq.WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleName string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1.0.0" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string FMWK" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string iPhoneOS" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string WQVad" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string 12.0" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :DTPlatformName string iphoneos" ${IOS_FRAMEWORK_DIR}/Info.plist
-/usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos" ${IOS_FRAMEWORK_DIR}/Info.plist
-
-# Validate the plist
-echo -e "${YELLOW}Validating Info.plist...${NC}"
-if plutil -lint ${IOS_FRAMEWORK_DIR}/Info.plist; then
-    echo -e "${GREEN}✅ Info.plist validation passed${NC}"
-    # Convert to XML format and check size
-    plutil -convert xml1 ${IOS_FRAMEWORK_DIR}/Info.plist
-    echo "Final Info.plist size: $(wc -c < ${IOS_FRAMEWORK_DIR}/Info.plist) bytes"
-else
-    echo -e "${RED}❌ Info.plist validation failed${NC}"
-    exit 1
-fi
-
-# Create pure C module.modulemap (no C++ module)
-cat > ${IOS_FRAMEWORK_DIR}/Modules/module.modulemap << EOF
-framework module ${FRAMEWORK_NAME} {
-    umbrella header "${FRAMEWORK_NAME}.h"
-    export *
-    module * { export * }
-}
+# Create Info.plist for XCFramework (minimal, just for the xcframework itself)
+cat > ${FRAMEWORK_NAME}.xcframework/Info.plist << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AvailableLibraries</key>
+    <array>
+        <dict>
+            <key>LibraryIdentifier</key>
+            <string>ios-arm64</string>
+            <key>LibraryPath</key>
+            <string>lib${FRAMEWORK_NAME}.a</string>
+            <key>HeadersPath</key>
+            <string>Headers</string>
+            <key>SupportedArchitectures</key>
+            <array>
+                <string>arm64</string>
+            </array>
+            <key>SupportedPlatform</key>
+            <string>ios</string>
+        </dict>
+    </array>
+    <key>CFBundlePackageType</key>
+    <string>XFWK</string>
+    <key>XCFrameworkFormatVersion</key>
+    <string>1.0</string>
+</dict>
+</plist>
 EOF
-
-# Verify framework structure before creating XCFramework
-echo -e "${YELLOW}Verifying framework structure...${NC}"
-echo "Framework directory contents:"
-find ${IOS_FRAMEWORK_DIR} -type f | head -20
-
-# Create XCFramework
-echo -e "${YELLOW}Creating XCFramework...${NC}"
-xcodebuild -create-xcframework \
-    -framework ${IOS_FRAMEWORK_DIR} \
-    -output ${FRAMEWORK_NAME}.xcframework
 
 # Verify the XCFramework
 echo -e "${YELLOW}Verifying XCFramework...${NC}"
 if [ -d "${FRAMEWORK_NAME}.xcframework" ]; then
-    echo -e "${GREEN}✅ XCFramework created successfully!${NC}"
+    echo -e "${GREEN}✅ Static library XCFramework created successfully!${NC}"
     echo -e "${GREEN}Location: $(pwd)/${FRAMEWORK_NAME}.xcframework${NC}"
     
-    # Show framework info
-    echo -e "${YELLOW}Framework contents:${NC}"
-    find ${FRAMEWORK_NAME}.xcframework -type f | head -20
+    # Show contents
+    echo -e "${YELLOW}XCFramework contents:${NC}"
+    find ${FRAMEWORK_NAME}.xcframework -type f
     
-    # Show architectures
-    echo -e "${YELLOW}Supported architectures:${NC}"
-    lipo -info ${FRAMEWORK_NAME}.xcframework/ios-arm64/${FRAMEWORK_NAME}.framework/${FRAMEWORK_NAME} 2>/dev/null || echo "iOS Device: arm64"
+    # Show library info
+    echo -e "${YELLOW}Library architecture:${NC}"
+    lipo -info ${FRAMEWORK_NAME}.xcframework/ios-arm64/lib${FRAMEWORK_NAME}.a
     
-    # Show bundle size
-    echo -e "${YELLOW}Framework size:${NC}"
+    # Show size
+    echo -e "${YELLOW}XCFramework size:${NC}"
     du -sh ${FRAMEWORK_NAME}.xcframework
     
+    echo -e "${GREEN}🎉 Build completed successfully!${NC}"
+    echo -e "${GREEN}Static library XCFramework created - no Info.plist issues!${NC}"
+    echo -e "${GREEN}Usage: Add both WQVad.xcframework and onnxruntime.xcframework to your Xcode project${NC}"
 else
     echo -e "${RED}❌ XCFramework creation failed!${NC}"
     exit 1
@@ -527,7 +490,3 @@ fi
 echo -e "${YELLOW}Cleaning up intermediate files...${NC}"
 rm -rf ${BUILD_DIR}
 rm -rf ${XCFRAMEWORK_DIR}
-
-echo -e "${GREEN}🎉 Build completed successfully!${NC}"
-echo -e "${GREEN}Pure C interface framework created - no C++ headers exposed!${NC}"
-echo -e "${GREEN}You can now use it in pure Objective-C (.m files)${NC}"
