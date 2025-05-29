@@ -381,9 +381,19 @@ if [ ! -f "${BUILD_DIR}/ios-arm64/lib${LIBRARY_NAME}.a" ]; then
     exit 1
 fi
 
-# Compile C wrapper and add to library
+# Compile C wrapper and combine with library properly
 echo -e "${YELLOW}Compiling C wrapper...${NC}"
 cd ${BUILD_DIR}/ios-arm64
+
+# Create a temporary directory for extracting object files
+mkdir -p temp_objects
+cd temp_objects
+
+# Extract object files from the original library
+ar x ../lib${LIBRARY_NAME}.a
+
+# Go back to build directory and compile wrapper
+cd ..
 clang++ -c ../c_wrapper_impl.cpp \
     -arch arm64 \
     -isysroot $(xcrun --sdk iphoneos --show-sdk-path) \
@@ -395,8 +405,12 @@ clang++ -c ../c_wrapper_impl.cpp \
     -I../../third_party/onnxruntime.xcframework/ios-arm64/onnxruntime.framework/Headers \
     -o c_wrapper_impl.o
 
-# Add wrapper to the library
-ar rcs lib${LIBRARY_NAME}_with_wrapper.a lib${LIBRARY_NAME}.a c_wrapper_impl.o
+# Create new library with all object files
+echo -e "${YELLOW}Creating combined library...${NC}"
+ar rcs lib${LIBRARY_NAME}_with_wrapper.a temp_objects/*.o c_wrapper_impl.o
+
+# Clean up temporary objects
+rm -rf temp_objects
 
 cd ../..
 
@@ -543,8 +557,9 @@ echo -e "${GREEN}1. Drag WQVad.xcframework to your project${NC}"
 echo -e "${GREEN}2. Import: #import <WQVad/WQVad.h>${NC}"
 echo -e "${GREEN}3. Use: ${NC}"
 cat << 'EOF'
-// Get model path from bundle
-NSString *modelPath = [[NSBundle mainBundle] pathForResource:@"silero_vad_v5" ofType:@"onnx"];
+// Get model path from framework bundle
+NSBundle *frameworkBundle = [NSBundle bundleForClass:[YourClass class]];
+NSString *modelPath = [frameworkBundle pathForResource:@"silero_vad_v5" ofType:@"onnx"];
 WQVadContext *vad = wqvad_create_from_file([modelPath UTF8String], 0.5);
 
 // Process audio (512 samples of 16kHz float audio)

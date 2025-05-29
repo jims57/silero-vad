@@ -1,0 +1,75 @@
+[100%] Built target wqvad
+Compiling C wrapper...
+Creating combined library...
+Creating framework structure for iOS Device...
+Combining WQVad with ONNX Runtime library...
+✅ Successfully combined libraries
+Copying public headers...
+✅ Copied ONNX Runtime headers
+Copying Silero VAD V5 model to framework resources...
+Verifying framework structure...
+Framework directory contents:
+xcframework/ios-arm64/WQVad.framework/Resources/silero_vad_v5.onnx
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_session_options_config_keys.h
+xcframework/ios-arm64/WQVad.framework/Headers/WQVad.h
+xcframework/ios-arm64/WQVad.framework/Headers/types.h
+xcframework/ios-arm64/WQVad.framework/Headers/coreml_provider_factory.h
+xcframework/ios-arm64/WQVad.framework/Headers/cpu_provider_factory.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_lite_custom_op.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_run_options_config_keys.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_float16.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_cxx_inline.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_cxx_api.h
+xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_c_api.h
+xcframework/ios-arm64/WQVad.framework/WQVad
+xcframework/ios-arm64/WQVad.framework/Modules/module.modulemap
+xcframework/ios-arm64/WQVad.framework/Info.plist
+Creating XCFramework...
+xcframework successfully written out to: /Users/mac/Documents/GitHub/silero-vad/my-info/cpp_project/WQVad.xcframework
+Verifying XCFramework...
+✅ XCFramework created successfully!
+Location: /Users/mac/Documents/GitHub/silero-vad/my-info/cpp_project/WQVad.xcframework
+Framework contents:
+WQVad.xcframework/ios-arm64/WQVad.framework/Resources/silero_vad_v5.onnx
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_session_options_config_keys.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/WQVad.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/types.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/coreml_provider_factory.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/cpu_provider_factory.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_lite_custom_op.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_run_options_config_keys.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_float16.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_cxx_inline.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_cxx_api.h
+WQVad.xcframework/ios-arm64/WQVad.framework/Headers/onnxruntime_c_api.h
+WQVad.xcframework/ios-arm64/WQVad.framework/WQVad
+WQVad.xcframework/ios-arm64/WQVad.framework/Modules/module.modulemap
+WQVad.xcframework/ios-arm64/WQVad.framework/Info.plist
+WQVad.xcframework/Info.plist
+Supported architectures:
+Non-fat file: WQVad.xcframework/ios-arm64/WQVad.framework/WQVad is architecture: arm64
+Framework size:
+ 36M    WQVad.xcframework
+Cleaning up intermediate files...
+🎉 Build completed successfully!
+You can now drag WQVad.xcframework into your iOS project.
+The framework includes:
+- Silero VAD V5 model bundled in Resources
+- ONNX Runtime statically linked
+- C API for Objective-C integration
+- C++ API for advanced usage
+Usage in your iOS project:
+1. Drag WQVad.xcframework to your project
+2. Import: #import <WQVad/WQVad.h>
+3. Use: 
+// Get model path from framework bundle
+NSBundle *frameworkBundle = [NSBundle bundleForClass:[YourClass class]];
+NSString *modelPath = [frameworkBundle pathForResource:@"silero_vad_v5" ofType:@"onnx"];
+WQVadContext *vad = wqvad_create_from_file([modelPath UTF8String], 0.5);
+
+// Process audio (512 samples of 16kHz float audio)
+float probability;
+int isVoice = wqvad_process_chunk(vad, audioSamples, 512, &probability);
+
+// Clean up
+wqvad_destroy(vad);
