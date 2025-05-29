@@ -117,6 +117,47 @@ int wqvad_resample_audio(const float* inputData,
  */
 void wqvad_free_audio_data(float* data);
 
+/**
+ * Process audio data and save detected speech segments as WAV files
+ * @param context WQVad context
+ * @param audioData Float audio samples (16kHz, mono)
+ * @param numSamples Total number of samples
+ * @param sampleRate Sample rate of the audio
+ * @param outputDir Directory path to save segment WAV files
+ * @return Number of segments saved, -1 on error
+ */
+int wqvad_process_audio_file(WQVadContext* context,
+                            const float* audioData,
+                            size_t numSamples,
+                            int sampleRate,
+                            const char* outputDir);
+
+/**
+ * Get sample indices for each speech segment (for PCM segmentation)
+ * @param context WQVad context
+ * @param audioData Float audio samples
+ * @param numSamples Total number of samples
+ * @param sampleRate Sample rate of the audio
+ * @param outStartSamples Output array of segment start samples (caller must free)
+ * @param outEndSamples Output array of segment end samples (caller must free)
+ * @param outNumSegments Number of segments returned
+ * @return 0 on success, -1 on error
+ */
+int wqvad_segment_audio(WQVadContext* context,
+                       const float* audioData,
+                       size_t numSamples,
+                       int sampleRate,
+                       size_t** outStartSamples,
+                       size_t** outEndSamples,
+                       size_t* outNumSegments);
+
+/**
+ * Free sample segment arrays returned by wqvad_segment_audio
+ * @param startSamples Start samples array to free
+ * @param endSamples End samples array to free
+ */
+void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples);
+
 #ifdef __cplusplus
 }
 #endif

@@ -170,6 +170,47 @@ int wqvad_resample_audio(const float* inputData,
  */
 void wqvad_free_audio_data(float* data);
 
+/**
+ * Process audio data and save detected speech segments as WAV files
+ * @param context WQVad context
+ * @param audioData Float audio samples (16kHz, mono)
+ * @param numSamples Total number of samples
+ * @param sampleRate Sample rate of the audio
+ * @param outputDir Directory path to save segment WAV files
+ * @return Number of segments saved, -1 on error
+ */
+int wqvad_process_audio_file(WQVadContext* context,
+                            const float* audioData,
+                            size_t numSamples,
+                            int sampleRate,
+                            const char* outputDir);
+
+/**
+ * Get sample indices for each speech segment (for PCM segmentation)
+ * @param context WQVad context
+ * @param audioData Float audio samples
+ * @param numSamples Total number of samples
+ * @param sampleRate Sample rate of the audio
+ * @param outStartSamples Output array of segment start samples (caller must free)
+ * @param outEndSamples Output array of segment end samples (caller must free)
+ * @param outNumSegments Number of segments returned
+ * @return 0 on success, -1 on error
+ */
+int wqvad_segment_audio(WQVadContext* context,
+                       const float* audioData,
+                       size_t numSamples,
+                       int sampleRate,
+                       size_t** outStartSamples,
+                       size_t** outEndSamples,
+                       size_t* outNumSegments);
+
+/**
+ * Free sample segment arrays returned by wqvad_segment_audio
+ * @param startSamples Start samples array to free
+ * @param endSamples End samples array to free
+ */
+void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples);
+
 #ifdef __cplusplus
 }
 #endif
@@ -186,6 +227,8 @@ cat > ${BUILD_DIR}/c_wrapper_impl.cpp << 'EOF'
 #include <fstream>
 #include <vector>
 #include <cstdlib>
+#include <iostream>
+#include <algorithm>
 
 using namespace wqvad;
 
@@ -193,6 +236,101 @@ struct WQVadContext {
     std::unique_ptr<SileroVAD> vad;
     VadConfig config;
 };
+
+// Helper function to segment audio data based on VAD results
+static std::vector<std::pair<size_t, size_t>> segmentAudioByVad(
+    const float* audioData, 
+    size_t numSamples, 
+    const std::vector<VadSegment>& vadSegments,
+    int sampleRate) {
+    
+    std::vector<std::pair<size_t, size_t>> sampleSegments;
+    float totalDuration = static_cast<float>(numSamples) / sampleRate;
+    
+    for (const auto& segment : vadSegments) {
+        // Skip segments that start at 0 and span nearly the entire audio
+        if (segment.startTime == 0.0f && segment.endTime >= totalDuration * 0.95f) {
+            std::cout << "⚠️ Skipping segment that spans entire audio" << std::endl;
+            continue;
+        }
+        
+        size_t startSample = static_cast<size_t>(segment.startTime * sampleRate);
+        size_t endSample = static_cast<size_t>(segment.endTime * sampleRate);
+        
+        // Ensure we don't exceed bounds
+        startSample = std::min(startSample, numSamples);
+        endSample = std::min(endSample, numSamples);
+        
+        if (startSample < endSample) {
+            sampleSegments.push_back({startSample, endSample});
+        }
+    }
+    
+    return sampleSegments;
+}
+
+// Helper function to save audio segments as WAV files
+static bool saveSegmentsAsWav(const float* audioData, 
+                      size_t numSamples,
+                      const std::vector<VadSegment>& vadSegments,
+                      int sampleRate,
+                      const std::string& outputDir) {
+    
+    auto sampleSegments = segmentAudioByVad(audioData, numSamples, vadSegments, sampleRate);
+    
+    for (size_t i = 0; i < sampleSegments.size(); ++i) {
+        auto [startSample, endSample] = sampleSegments[i];
+        size_t segmentLength = endSample - startSample;
+        
+        std::string filename = outputDir + "/segment_" + std::to_string(i + 1) + ".wav";
+        
+        // Write WAV header and data
+        std::ofstream file(filename, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "❌ Failed to create file: " << filename << std::endl;
+            return false;
+        }
+        
+        // WAV header
+        struct WavHeader {
+            char riff[4] = {'R', 'I', 'F', 'F'};
+            uint32_t fileSize;
+            char wave[4] = {'W', 'A', 'V', 'E'};
+            char fmt[4] = {'f', 'm', 't', ' '};
+            uint32_t fmtSize = 16;
+            uint16_t audioFormat = 1; // PCM
+            uint16_t numChannels = 1; // Mono
+            uint32_t sampleRate;
+            uint32_t byteRate;
+            uint16_t blockAlign = 2;
+            uint16_t bitsPerSample = 16;
+            char data[4] = {'d', 'a', 't', 'a'};
+            uint32_t dataSize;
+        } header;
+        
+        header.sampleRate = sampleRate;
+        header.byteRate = sampleRate * 1 * 16 / 8;
+        header.dataSize = segmentLength * 2;
+        header.fileSize = header.dataSize + sizeof(WavHeader) - 8;
+        
+        // Convert float to 16-bit PCM
+        std::vector<int16_t> pcmData(segmentLength);
+        for (size_t j = 0; j < segmentLength; ++j) {
+            float sample = audioData[startSample + j];
+            sample = std::max(-1.0f, std::min(1.0f, sample)); // Clamp
+            pcmData[j] = static_cast<int16_t>(sample * 32767.0f);
+        }
+        
+        // Write header and data
+        file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+        file.write(reinterpret_cast<const char*>(pcmData.data()), pcmData.size() * sizeof(int16_t));
+        
+        file.close();
+        std::cout << "💾 Saved segment " << (i + 1) << " to: " << filename << std::endl;
+    }
+    
+    return true;
+}
 
 extern "C" {
 
@@ -344,6 +482,73 @@ int wqvad_resample_audio(const float* inputData,
 
 void wqvad_free_audio_data(float* data) {
     free(data);
+}
+
+int wqvad_process_audio_file(WQVadContext* context,
+                            const float* audioData,
+                            size_t numSamples,
+                            int sampleRate,
+                            const char* outputDir) {
+    if (!context || !audioData || !outputDir) {
+        return -1;
+    }
+    
+    try {
+        std::vector<float> audio(audioData, audioData + numSamples);
+        auto segments = context->vad->processAudio(audio);
+        
+        // Save segments as WAV files
+        if (!saveSegmentsAsWav(audioData, numSamples, segments, sampleRate, outputDir)) {
+            return -1;
+        }
+        
+        return static_cast<int>(segments.size());
+    } catch (...) {
+        return -1;
+    }
+}
+
+int wqvad_segment_audio(WQVadContext* context,
+                       const float* audioData,
+                       size_t numSamples,
+                       int sampleRate,
+                       size_t** outStartSamples,
+                       size_t** outEndSamples,
+                       size_t* outNumSegments) {
+    if (!context || !audioData || !outStartSamples || !outEndSamples || !outNumSegments) {
+        return -1;
+    }
+    
+    try {
+        std::vector<float> audio(audioData, audioData + numSamples);
+        auto vadSegments = context->vad->processAudio(audio);
+        auto sampleSegments = segmentAudioByVad(audioData, numSamples, vadSegments, sampleRate);
+        
+        *outNumSegments = sampleSegments.size();
+        if (sampleSegments.empty()) {
+            *outStartSamples = nullptr;
+            *outEndSamples = nullptr;
+            return 0;
+        }
+        
+        // Allocate arrays for start and end samples
+        *outStartSamples = static_cast<size_t*>(malloc(sampleSegments.size() * sizeof(size_t)));
+        *outEndSamples = static_cast<size_t*>(malloc(sampleSegments.size() * sizeof(size_t)));
+        
+        for (size_t i = 0; i < sampleSegments.size(); ++i) {
+            (*outStartSamples)[i] = sampleSegments[i].first;
+            (*outEndSamples)[i] = sampleSegments[i].second;
+        }
+        
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+void wqvad_free_sample_segments(size_t* startSamples, size_t* endSamples) {
+    free(startSamples);
+    free(endSamples);
 }
 
 } // extern "C"
