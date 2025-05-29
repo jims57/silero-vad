@@ -235,6 +235,19 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                               size_t numSamples);
 
 /**
+ * Process a chunk of streaming audio with automatic resampling
+ * @param streamContext Stream context
+ * @param audioData Float audio samples (any sample rate)
+ * @param numSamples Number of samples in this chunk
+ * @param inputSampleRate Sample rate of the input audio
+ * @return Number of new segments detected in this chunk, -1 on error
+ */
+int wqvad_process_stream_chunk_resampled(WQVadStreamContext* streamContext,
+                                        const float* audioData,
+                                        size_t numSamples,
+                                        int inputSampleRate);
+
+/**
  * Finalize streaming and save any remaining segments
  * @param streamContext Stream context
  * @return Total number of segments detected, -1 on error
@@ -612,7 +625,7 @@ WQVadStreamContext* wqvad_create_stream_context(WQVadContext* vadContext,
         auto streamContext = std::make_unique<WQVadStreamContext>();
         streamContext->vadContext = vadContext;
         streamContext->outputDir = outputDir;
-        streamContext->sampleRate = sampleRate;
+        streamContext->sampleRate = 16000;  // Always use 16kHz since we resample to this rate
         streamContext->totalSamplesProcessed = 0;
         streamContext->segmentCounter = 0;
         streamContext->inSpeech = false;
@@ -874,6 +887,43 @@ int wqvad_finalize_stream(WQVadStreamContext* streamContext) {
 
 void wqvad_destroy_stream_context(WQVadStreamContext* streamContext) {
     delete streamContext;
+}
+
+int wqvad_process_stream_chunk_resampled(WQVadStreamContext* streamContext,
+                                        const float* audioData,
+                                        size_t numSamples,
+                                        int inputSampleRate) {
+    if (!streamContext || !audioData) {
+        return -1;
+    }
+    
+    try {
+        // If input is already 16kHz, process directly
+        if (inputSampleRate == 16000) {
+            return wqvad_process_stream_chunk(streamContext, audioData, numSamples);
+        }
+        
+        // Resample to 16kHz
+        float resampleRatio = 16000.0f / inputSampleRate;
+        size_t targetFrameCount = static_cast<size_t>(numSamples * resampleRatio);
+        std::vector<float> resampledData(targetFrameCount);
+        
+        // Simple linear interpolation resampling
+        for (size_t i = 0; i < targetFrameCount; i++) {
+            float srcIndex = i / resampleRatio;
+            size_t index1 = static_cast<size_t>(srcIndex);
+            size_t index2 = std::min(index1 + 1, numSamples - 1);
+            float fraction = srcIndex - index1;
+            
+            resampledData[i] = audioData[index1] * (1.0f - fraction) + audioData[index2] * fraction;
+        }
+        
+        // Process the resampled data
+        return wqvad_process_stream_chunk(streamContext, resampledData.data(), targetFrameCount);
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Error in stream chunk resampling: " << e.what() << std::endl;
+        return -1;
+    }
 }
 
 } // extern "C"

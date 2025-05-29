@@ -182,6 +182,19 @@ int wqvad_process_stream_chunk(WQVadStreamContext* streamContext,
                               size_t numSamples);
 
 /**
+ * Process a chunk of streaming audio with automatic resampling
+ * @param streamContext Stream context
+ * @param audioData Float audio samples (any sample rate)
+ * @param numSamples Number of samples in this chunk
+ * @param inputSampleRate Sample rate of the input audio
+ * @return Number of new segments detected in this chunk, -1 on error
+ */
+int wqvad_process_stream_chunk_resampled(WQVadStreamContext* streamContext,
+                                        const float* audioData,
+                                        size_t numSamples,
+                                        int inputSampleRate);
+
+/**
  * Finalize streaming and save any remaining segments
  * @param streamContext Stream context
  * @return Total number of segments detected, -1 on error
